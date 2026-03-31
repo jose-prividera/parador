@@ -912,3 +912,11 @@ if __name__ == "__main__":
             for sheet in writer.sheets.values(): sheet.set_column('A:A', 20)
             
             generar_hoja_tablas_revision_y_exportar(df_getnet, df_mp, df_sis, writer, cfg)
+            
+        print(">>> PROCESO FINALIZADO.")
+        
+    except Exception as e: 
+        print(f"ERROR FASE 2: {e}")
+        traceback.print_exc()
+        
+    input("Presiona ENTER para salir...")
