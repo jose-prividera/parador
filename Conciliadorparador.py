@@ -228,7 +228,7 @@ def transformar_reporte_getnet(ruta_archivo):
     try:
         df = pd.read_excel(ruta_archivo, sheet_name=0, dtype=str)
         
-        # 1. NORMALIZACIÓN EXTREMA: Pasamos todo a minúsculas, quitamos espacios extra y borramos tildes
+        # 1. NORMALIZACIÓN: Minúsculas y limpieza de nombres
         df.columns = (df.columns.astype(str)
                       .str.strip()
                       .str.lower()
@@ -237,75 +237,71 @@ def transformar_reporte_getnet(ruta_archivo):
                       .str.replace('ú', 'u'))
     except: return pd.DataFrame()
     
-    # 2. RENOMBRADO OFICIAL: Forzamos las columnas normalizadas a los nombres exactos
+    # 2. RENOMBRADO SEGURO
+    # Primero definimos la fecha para que el buscador de ID no la confunda
     mapeo_columnas = {
-        'estado': 'Estado venta',            
-        'estado venta': 'Estado venta',
         'fecha de operacion': 'Fecha de operacion',
+        'fecha': 'Fecha de operacion',
         'monto bruto transaccion': 'Monto Bruto Transaccion',
+        'monto bruto': 'Monto Bruto Transaccion',
         'arancel': 'Arancel',
         'iva arancel': 'IVA Arancel',
         'monto neto transaccion': 'Monto Neto Transaccion',
         'tipo de transaccion': 'Tipo de Transaccion',
-        
-        # --- VARIACIONES PARA EL ID DE TRANSACCIÓN ---
-        'cod de transaccion': 'Cod de Transaccion',
-        'codigo de transaccion': 'Cod de Transaccion',
-        'id de transaccion': 'Cod de Transaccion',
-        'nro de operacion': 'Cod de Transaccion',
-        'codigo de autorizacion': 'Cod de Transaccion',
-        'referencia': 'Cod de Transaccion',
-        'comprobante': 'Cod de Transaccion',
-        'nro comprobante': 'Cod de Transaccion'
+        'estado venta': 'Estado venta',
+        'estado': 'Estado venta'
     }
     df.rename(columns=mapeo_columnas, inplace=True)
 
-    # --- SEGURO ANTI-FALLOS BLINDADO ---
+    # 3. BUSCADOR DINÁMICO DE ID (Evitando la columna Fecha)
     if 'Cod de Transaccion' not in df.columns:
-        # Buscador dinámico: si no encontró el nombre exacto, busca palabras clave en las columnas
-        for col in df.columns:
-            if any(kw in col for kw in ['transaccion', 'operacion', 'autorizacion', 'comprobante', 'id']):
-                df.rename(columns={col: 'Cod de Transaccion'}, inplace=True)
+        # Buscamos nombres específicos primero
+        nombres_id = ['cod de transaccion', 'codigo de transaccion', 'id de transaccion', 'nro de operacion', 'codigo de autorizacion']
+        for nid in nombres_id:
+            if nid in df.columns:
+                df.rename(columns={nid: 'Cod de Transaccion'}, inplace=True)
                 break
+        
+        # Si sigue sin aparecer, buscamos por palabra clave pero ignoramos la fecha
+        if 'Cod de Transaccion' not in df.columns:
+            for col in df.columns:
+                col_min = col.lower()
+                # Si dice transaccion/operacion/id PERO NO dice "fecha", es nuestro ID
+                if any(kw in col_min for kw in ['transaccion', 'operacion', 'autorizacion', 'id']) and 'fecha' not in col_min:
+                    df.rename(columns={col: 'Cod de Transaccion'}, inplace=True)
+                    break
 
+    # Seguro final para el ID
     if 'Cod de Transaccion' not in df.columns:
-        # Si de verdad no hay nada, imprimimos las columnas que vinieron para saber qué pasó
-        print(f"   [!] ADVERTENCIA: No se encontró ID en Getnet. Columnas leídas: {list(df.columns)}")
         df['Cod de Transaccion'] = "Sin ID"
     else:
-        # Si lo encontró, le sacamos el ".0" final por si el Excel lo tomó como número
         df['Cod de Transaccion'] = df['Cod de Transaccion'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
 
-    # 3. PROCESAMIENTO NORMAL DE FECHAS
+    # 4. PROCESAMIENTO DE FECHAS
     col_fecha = "Fecha de operacion"
     if col_fecha in df.columns:
         df['FECHA_DT'] = normalizar_fecha_argentina(df[col_fecha])
         df[col_fecha] = formato_visual_columna(df, 'FECHA_DT')
     else:
-        print("   [!] ADVERTENCIA: No se encontró la columna de fechas en Getnet.")
-        df['FECHA_DT'] = pd.NaT
+        # Si por alguna razón Getnet cambió el nombre a algo muy raro, intentamos capturar la columna 0
+        df.rename(columns={df.columns[0]: 'Fecha de operacion'}, inplace=True)
+        df['FECHA_DT'] = normalizar_fecha_argentina(df['Fecha de operacion'])
+        df['Fecha de operacion'] = formato_visual_columna(df, 'FECHA_DT')
     
-    # 4. APLICAR LIMPIEZA DE MONTOS
+    # 5. LIMPIEZA DE MONTOS
     cols_money = ["Monto Bruto Transaccion", "Arancel", "IVA Arancel", "Monto Neto Transaccion"]
     for col in cols_money:
         if col in df.columns: df[col] = df[col].apply(limpiar_monto_general)
 
-    # 5. LÓGICA DE ESTADOS Y ANULACIONES
-    col_monto_bruto = "Monto Bruto Transaccion"
-    col_tipo_tx = "Tipo de Transaccion"
-    col_estado_venta = "Estado venta"
-
-    if col_monto_bruto in df.columns:
-        es_anulacion = pd.Series(False, index=df.index)
-        if col_tipo_tx in df.columns:
-            es_anulacion = df[col_tipo_tx].astype(str).str.lower().str.contains('anulaci', na=False)
+    # 6. LÓGICA DE ANULACIONES
+    if 'Monto Bruto Transaccion' in df.columns:
+        mask_neg = pd.Series(False, index=df.index)
+        if 'Tipo de Transaccion' in df.columns:
+            mask_neg |= df['Tipo de Transaccion'].astype(str).str.lower().str.contains('anulaci', na=False)
+        if 'Estado venta' in df.columns:
+            mask_neg |= df['Estado venta'].astype(str).str.lower().str.contains('rechazado', na=False)
         
-        es_rechazado = pd.Series(False, index=df.index)
-        if col_estado_venta in df.columns:
-            es_rechazado = df[col_estado_venta].astype(str).str.lower().str.contains('rechazado', na=False)
-        
-        mask_negativo = es_anulacion | es_rechazado
-        df.loc[mask_negativo, col_monto_bruto] = df.loc[mask_negativo, col_monto_bruto].abs() * -1
+        df.loc[mask_neg, 'Monto Bruto Transaccion'] = df.loc[mask_neg, 'Monto Bruto Transaccion'].abs() * -1
 
     return df
 def procesar_caja_adicion(ruta_input, ruta_output_xlsm, nombre_hoja_destino, df_turnos_maestro):
