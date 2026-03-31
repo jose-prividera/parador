@@ -479,42 +479,51 @@ def procesar_comandas(ruta_input, ruta_output_xlsm, nombre_hoja_destino, df_turn
     except Exception as e: print(f"Error procesando comandas: {e}")
 
 def auditar_duplicados_cruce(df_getnet, df_mp, df_sys):
-    print("\n>>> Verificando integridad de cruces (Buscando Duplicados)...")
+    print("\n>>> Verificando integridad de cruces (Buscando Duplicados reales)...")
     alertas = []
 
-    def chequear_tabla(df, nombre_tabla, col_cruce, col_id_principal):
-        if df.empty or col_cruce not in df.columns: return
+    def chequear_plataforma_duplicada(df, nombre_tabla, col_id_plataforma, col_id_sistema):
+        if df.empty or col_id_plataforma not in df.columns: return
         
-        # Filtramos los conciliados que tengan un ID de cruce válido
-        mask_validos = (df['Estado'] == 'Conciliado') & df[col_cruce].notna() & (df[col_cruce].astype(str).str.strip() != '') & (df[col_cruce].astype(str).str.strip() != 'nan')
+        # Filtramos las filas conciliadas que tengan un ID de plataforma asignado
+        mask_validos = (df['Estado'] == 'Conciliado') & df[col_id_plataforma].notna() & (df[col_id_plataforma].astype(str).str.strip() != '') & (df[col_id_plataforma].astype(str).str.strip() != 'nan')
         df_conciliados = df[mask_validos].copy()
         if df_conciliados.empty: return
 
-        # Buscamos si el mismo ID de cruce se repite más de una vez
-        duplicados = df_conciliados[df_conciliados.duplicated(subset=[col_cruce], keep=False)].copy()
+        # Buscamos si un MISMO ID de Mercado Pago o Getnet se usó para conciliar MÁS DE UNA VENTA en el sistema
+        duplicados = df_conciliados[df_conciliados.duplicated(subset=[col_id_plataforma], keep=False)].copy()
         
         if not duplicados.empty:
-            cols_basicas = [col_id_principal, 'datetime_col', 'TURNO', 'monto_col_numeric', 'Estado', 'Tipo Match', col_cruce]
+            cols_basicas = [col_id_sistema, 'datetime_col', 'TURNO', 'monto_col_numeric', 'Estado', 'Tipo Match', col_id_plataforma]
             cols_disponibles = [c for c in cols_basicas if c in duplicados.columns]
 
             df_rep = duplicados[cols_disponibles].copy()
             df_rep.insert(0, 'Tabla Origen', nombre_tabla)
             alertas.append(df_rep)
 
-    # 1. Plataformas (Revisamos si apuntan a la misma venta de sistema)
-    chequear_tabla(df_getnet, "Getnet", 'ID Venta Sistema (Conc.)', 'Cod de Transaccion')
-    chequear_tabla(df_mp, "Mercado Pago", 'ID Venta Sistema (Conc.)', 'ID DE OPERACIÓN EN MERCADO PAGO')
+    # 1. SOLO REVISAMOS EL SISTEMA: Buscamos si un ID de MP o Getnet fue "chupado" por dos filas del sistema
+    # (Ya NO revisamos si el ID del sistema se repite, porque eso es normal en pagos divididos)
+    chequear_plataforma_duplicada(df_sys, "Alerta MP Doble", 'ID Operación MP (Conc.)', 'ID de venta')
+    chequear_plataforma_duplicada(df_sys, "Alerta Getnet Doble", 'ID Operación Getnet (Conc.)', 'ID de venta')
 
-    # 2. Sistema (Revisamos si apuntan a la misma operación de plataforma)
-    chequear_tabla(df_sys, "Sistema (Match MP)", 'ID Operación MP (Conc.)', 'ID de venta')
-    chequear_tabla(df_sys, "Sistema (Match Getnet)", 'ID Operación Getnet (Conc.)', 'ID de venta')
+    # 2. Verificamos si el propio archivo de Mercado Pago traía el mismo ID repetido por error y se concilió
+    if not df_mp.empty and 'ID DE OPERACIÓN EN MERCADO PAGO' in df_mp.columns:
+        mask_mp_valido = (df_mp['Estado'] == 'Conciliado')
+        df_mp_conc = df_mp[mask_mp_valido].copy()
+        dups_mp = df_mp_conc[df_mp_conc.duplicated(subset=['ID DE OPERACIÓN EN MERCADO PAGO'], keep=False)].copy()
+        
+        if not dups_mp.empty:
+            cols_disps = [c for c in ['ID DE OPERACIÓN EN MERCADO PAGO', 'datetime_col', 'TURNO', 'monto_col_numeric', 'Estado', 'Tipo Match'] if c in dups_mp.columns]
+            df_rep_mp = dups_mp[cols_disps].copy()
+            df_rep_mp.insert(0, 'Tabla Origen', "Reporte MP Original")
+            alertas.append(df_rep_mp)
 
     if alertas:
         df_final = pd.concat(alertas, ignore_index=True)
-        print(f"   [ALERTA ROJA] ⚠️ Se detectaron {len(df_final)} registros involucrados en cruces duplicados.")
+        print(f"   [ALERTA ROJA] ⚠️ Se detectaron {len(df_final)} cobros de plataforma conciliados doblemente.")
         return df_final
     else:
-        print("   [OK] ✅ Integridad perfecta: No hay cruces duplicados.")
+        print("   [OK] ✅ Integridad perfecta: No hay duplicados de cobros.")
         return pd.DataFrame()
 
 # =============================================================================
