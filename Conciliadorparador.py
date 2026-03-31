@@ -237,9 +237,9 @@ def transformar_reporte_getnet(ruta_archivo):
                       .str.replace('ú', 'u'))
     except: return pd.DataFrame()
     
-    # 2. RENOMBRADO OFICIAL: Forzamos las columnas normalizadas a los nombres exactos y bonitos
+    # 2. RENOMBRADO OFICIAL: Forzamos las columnas normalizadas a los nombres exactos
     mapeo_columnas = {
-        'estado': 'Estado venta',           
+        'estado': 'Estado venta',            
         'estado venta': 'Estado venta',
         'fecha de operacion': 'Fecha de operacion',
         'monto bruto transaccion': 'Monto Bruto Transaccion',
@@ -253,22 +253,28 @@ def transformar_reporte_getnet(ruta_archivo):
         'codigo de transaccion': 'Cod de Transaccion',
         'id de transaccion': 'Cod de Transaccion',
         'nro de operacion': 'Cod de Transaccion',
-        
-        # --- NUEVAS COLUMNAS DE GETNET ---
-        'nombre del producto': 'Nombre del Producto',
-        'dni del pagador': 'DNI del Pagador',
-        'correo electronico': 'Correo Electrónico',
-        'nombre y apellido': 'Nombre y Apellido',
-        'origen': 'Origen'
+        'codigo de autorizacion': 'Cod de Transaccion',
+        'referencia': 'Cod de Transaccion',
+        'comprobante': 'Cod de Transaccion',
+        'nro comprobante': 'Cod de Transaccion'
     }
-    # Aplicamos el mapeo.
     df.rename(columns=mapeo_columnas, inplace=True)
 
-    # --- SEGURO ANTI-FALLOS ---
-    # Si después de todo el mapeo la columna sigue sin existir, la creamos vacía para evitar crasheos en la FASE 2
+    # --- SEGURO ANTI-FALLOS BLINDADO ---
     if 'Cod de Transaccion' not in df.columns:
-        print("   [!] ADVERTENCIA: No se encontró la columna de ID en Getnet. Se asignará 'Sin ID'.")
+        # Buscador dinámico: si no encontró el nombre exacto, busca palabras clave en las columnas
+        for col in df.columns:
+            if any(kw in col for kw in ['transaccion', 'operacion', 'autorizacion', 'comprobante', 'id']):
+                df.rename(columns={col: 'Cod de Transaccion'}, inplace=True)
+                break
+
+    if 'Cod de Transaccion' not in df.columns:
+        # Si de verdad no hay nada, imprimimos las columnas que vinieron para saber qué pasó
+        print(f"   [!] ADVERTENCIA: No se encontró ID en Getnet. Columnas leídas: {list(df.columns)}")
         df['Cod de Transaccion'] = "Sin ID"
+    else:
+        # Si lo encontró, le sacamos el ".0" final por si el Excel lo tomó como número
+        df['Cod de Transaccion'] = df['Cod de Transaccion'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
 
     # 3. PROCESAMIENTO NORMAL DE FECHAS
     col_fecha = "Fecha de operacion"
@@ -276,7 +282,7 @@ def transformar_reporte_getnet(ruta_archivo):
         df['FECHA_DT'] = normalizar_fecha_argentina(df[col_fecha])
         df[col_fecha] = formato_visual_columna(df, 'FECHA_DT')
     else:
-        print("   [!] ADVERTENCIA: No se encontró la columna de fechas en Getnet tras la normalización.")
+        print("   [!] ADVERTENCIA: No se encontró la columna de fechas en Getnet.")
         df['FECHA_DT'] = pd.NaT
     
     # 4. APLICAR LIMPIEZA DE MONTOS
@@ -302,7 +308,6 @@ def transformar_reporte_getnet(ruta_archivo):
         df.loc[mask_negativo, col_monto_bruto] = df.loc[mask_negativo, col_monto_bruto].abs() * -1
 
     return df
-
 def procesar_caja_adicion(ruta_input, ruta_output_xlsm, nombre_hoja_destino, df_turnos_maestro):
     print(f"    -> Procesando Caja Adición hacia '{nombre_hoja_destino}'...")
     if not os.path.exists(ruta_input): return
